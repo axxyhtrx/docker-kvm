@@ -213,7 +213,7 @@ fi
 echo "parameter: ${FLAGS_REMOTE_ACCESS}"
 
 if [ $CONSOLE -eq 1 ]; then
-  FLAGS_CONSOLE="-serial stdio"
+  FLAGS_CONSOLE="-serial telnet:localhost:4321,server,nowait"
   echo "parameter: ${FLAGS_CONSOLE}"
 fi
 

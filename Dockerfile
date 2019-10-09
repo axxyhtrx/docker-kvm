@@ -33,7 +33,7 @@ ENV BALLOON 1
 ADD startup.sh /
 ADD seabios-no-usb.bin /opt/qemu/
 
-EXPOSE 22 4444 5900
+EXPOSE 22 4444 4321 5900
 
 VOLUME /data
 
