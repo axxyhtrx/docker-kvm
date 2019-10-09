@@ -1,19 +1,11 @@
-FROM ubuntu:16.04
-MAINTAINER Emre <e@emre.pm>
-
-ENV DEBIAN_FRONTEND noninteractive
+FROM alpine
 
 RUN \
-  apt-get update && \
-  apt-get install -y qemu-kvm qemu-utils bridge-utils dnsmasq uml-utilities iptables wget net-tools && \
-  apt-get autoclean && \
-  apt-get autoremove && \
-  rm -rf /var/lib/apt/lists/*
+  apk add --no-cache qemu-system-x86_64 qemu-img bridge-utils dnsmasq iproute2 wget iptables net-tools bash busybox-extras
 
-ADD startup.sh /
-
+ENV MACHINE pc
 ENV RAM 2048
-ENV SMP 1
+ENV SMP 2
 ENV CPU qemu64
 ENV DISK_DEVICE scsi
 ENV IMAGE /data/disk-image
@@ -24,6 +16,7 @@ ENV IMAGE_DISCARD unmap
 ENV IMAGE_CREATE 0
 ENV ISO_DOWNLOAD 0
 ENV NETWORK tap
+ENV SPICE none
 ENV VNC none
 ENV VNC_IP ""
 ENV VNC_ID 0
@@ -31,6 +24,16 @@ ENV VNC_PORT 5500
 ENV VNC_SOCK /data/vnc.sock
 ENV TCP_PORTS ""
 ENV UDP_PORTS ""
+ENV MONITOR ""
+ENV CONSOLE 1
+ENV BIOS 1
+ENV BIOS_IMAGE /opt/qemu/seabios-no-usb.bin
+ENV BALLOON 1
+
+ADD startup.sh /
+ADD seabios-no-usb.bin /opt/qemu/
+
+EXPOSE 22 4444 5900
 
 VOLUME /data
 

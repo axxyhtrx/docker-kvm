@@ -11,9 +11,11 @@ if [ ! -e /dev/kvm ]; then
   set -e
 fi
 
+QEMU=/usr/bin/qemu-system-x86_64
+
 # If we were given arguments, override the default configuration
 if [ $# -gt 0 ]; then
-  exec /usr/bin/kvm $@
+  exec $QEMU $@
   exit $?
 fi
 
@@ -67,6 +69,12 @@ if [ -n "$ISO2" ]; then
   echo "parameter: ${FLAGS_ISO2}"
 fi
 
+if [ $BIOS -eq 1 ]; then
+  echo "[bios]"
+  FLAGS_BIOS="-bios ${BIOS_IMAGE}"
+  echo "parameter: ${FLAGS_BIOS}"
+fi
+
 echo "[disk image]"
 if [ "$IMAGE_CREATE" == "1" ]; then
   qemu-img create -f ${IMAGE_FORMAT} ${IMAGE} ${IMAGE_SIZE}
@@ -74,11 +82,13 @@ elif [ "${IMAGE:0:4}" != "rbd:" ] && [ ! -f "$IMAGE" ]; then
   echo "IMAGE not found: ${IMAGE}"; exit 1;
 fi
 if [ "$DISK_DEVICE" == "scsi" ]; then
-  FLAGS_DISK_IMAGE="-device virtio-scsi-pci,id=scsi -drive file=${IMAGE},if=none,id=hd,cache=${IMAGE_CACHE},discard=${IMAGE_DISCARD},index=1 -device scsi-hd,drive=hd"
+  FLAGS_DISK_IMAGE="-device virtio-scsi-pci,id=scsi0 -drive file=${IMAGE},if=none,id=hd,cache=${IMAGE_CACHE},discard=${IMAGE_DISCARD} -device scsi-hd,drive=hd,bus=scsi0.0,scsi-id=0,lun=0,id=scsi-disk0"
+elif [ "$DISK_DEVICE" == "blk" ]; then
+  FLAGS_DISK_IMAGE="-device virtio-blk-pci,scsi=off,addr=0x3,drive=drive-virtio-disk0,id=virtio-disk0,bootindex=1 -drive file=${IMAGE},if=none,id=drive-virtio-disk0,format=${IMAGE_FORMAT}"
 else
   FLAGS_DISK_IMAGE="-drive file=${IMAGE},if=${DISK_DEVICE},cache=${IMAGE_CACHE},format=${IMAGE_FORMAT},index=1"
 fi
-echo "parameter: ${FLAGS_DISK_IMAGE}"
+echo "parameter: [$DISK_DEVICE] ${FLAGS_DISK_IMAGE}"
 
 if [ -n "$FLOPPY" ]; then
   echo "[floppy image]"
@@ -91,8 +101,10 @@ if [ "$NETWORK" == "bridge" ]; then
   NETWORK_BRIDGE="${NETWORK_BRIDGE:-docker0}"
   hexchars="0123456789ABCDEF"
   NETWORK_MAC="${NETWORK_MAC:-$(echo 00:F0$(for i in {1..8} ; do echo -n ${hexchars:$(( $RANDOM % 16 )):1} ; done | sed -e 's/\(..\)/:\1/g'))}"
+  echo "mac address: ${NETWORK_MAC}"
+  mkdir -p /etc/qemu
   echo allow $NETWORK_BRIDGE > /etc/qemu/bridge.conf
-  FLAGS_NETWORK="-netdev bridge,br=${NETWORK_BRIDGE},id=net0 -device virtio-net,netdev=net0,mac=${NETWORK_MAC}"
+  FLAGS_NETWORK="-netdev bridge,br=${NETWORK_BRIDGE},id=net0 -device virtio-net,romfile=${NETWORK_ROMFILE},netdev=net0,mac=${NETWORK_MAC}"
 elif [ "$NETWORK" == "tap" ]; then
   IFACE=eth0
   TAP_IFACE=tap0
@@ -124,6 +136,7 @@ elif [ "$NETWORK" == "macvtap" ]; then
   NETWORK_BRIDGE="${NETWORK_BRIDGE:-vtap0}"
   hexchars="0123456789ABCDEF"
   NETWORK_MAC="${NETWORK_MAC:-$(echo 00:F0$(for i in {1..8} ; do echo -n ${hexchars:$(( $RANDOM % 16 )):1} ; done | sed -e 's/\(..\)/:\1/g'))}"
+  echo "mac address: ${NETWORK_MAC}"
   set +e
   ip link add link $NETWORK_IF name $NETWORK_BRIDGE address $NETWORK_MAC type macvtap mode bridge
   if [[ $? -ne 0 ]]; then
@@ -157,7 +170,7 @@ else
     done
     IFS=$OIFS
   fi
-  
+
   if [ ! -z "$UDP_PORTS" ]; then
     OIFS=$IFS
     IFS=","
@@ -171,17 +184,38 @@ fi
 echo "Using ${NETWORK}"
 echo "parameter: ${FLAGS_NETWORK}"
 
-echo "[Remote Access]"
-if [ "$VNC" == "tcp" ]; then
+echo "[remote]"
+
+# Spice
+if [ "$SPICE" == "tcp" ]; then
+  SPICE_ID=${SPICE_ID:-$VNC_ID}
+  SPICE_PORT=${SPICE_PORT:-$((5900 + $SPICE_ID))}
+  FLAGS_SPICE_PWD=",disable-ticketing"
+  if [ -n "$SPICE_PASSWORD" ]; then
+    FLAGS_SPICE_PWD=",password=$SPICE_PASSWORD"
+  fi
+  FLAGS_REMOTE_ACCESS="-vga qxl -spice port=${SPICE_PORT}${FLAGS_SPICE_PWD} -device virtio-serial-pci -device virtserialport,chardev=spicechannel0,name=com.redhat.spice.0 -chardev spicevmc,id=spicechannel0,name=vdagent"
+elif [ "$SPICE" == "sock" ]; then
+  FLAGS_REMOTE_ACCESS="-vga qxl -spice unix,addr=${SPICE_SOCK},disable-ticketing -device virtio-serial-pci -device virtserialport,chardev=spicechannel0,name=com.redhat.spice.0 -chardev spicevmc,id=spicechannel0,name=vdagent"
+
+# VNC
+elif [ "$VNC" == "tcp" ]; then
   FLAGS_REMOTE_ACCESS="-vnc ${VNC_IP}:${VNC_ID}"
 elif [ "$VNC" == "reverse" ]; then
   FLAGS_REMOTE_ACCESS="-vnc ${VNC_IP}:${VNC_PORT},reverse"
 elif [ "$VNC" == "sock" ]; then
   FLAGS_REMOTE_ACCESS="-vnc unix:${VNC_SOCK}"
+
+# No graphics
 else
   FLAGS_REMOTE_ACCESS="-nographic"
 fi
 echo "parameter: ${FLAGS_REMOTE_ACCESS}"
+
+if [ $CONSOLE -eq 1 ]; then
+  FLAGS_CONSOLE="-serial stdio"
+  echo "parameter: ${FLAGS_CONSOLE}"
+fi
 
 if [ -n "$BOOT" ]; then
   echo "[boot]"
@@ -195,14 +229,61 @@ if [ -n "$KEYBOARD" ]; then
   echo "parameter: ${FLAGS_KEYBOARD}"
 fi
 
+if [ -n "$USB" ]; then
+  echo "[usb]"
+  FLAGS_USB="-usb -usbdevice tablet"
+  echo "parameter: ${FLAGS_USB}"
+fi
+
+if [ -n "$MONITOR" ]; then
+  echo "[monitor]"
+  if [ "$MONITOR" == "telnet" ]; then
+    MONITOR_HOST=${MONITOR_HOST:-localhost}
+    MONITOR_PORT=${MONITOR_PORT:-4444}
+    FLAGS_MONITOR="-chardev socket,id=mon0,host=$MONITOR_HOST,port=$MONITOR_PORT,server,nowait -mon chardev=mon0,mode=readline,pretty=on"
+  fi
+fi
+
+if [ -n "$FLAGS_DEBUG" ]; then
+    touch /tmp/qemu.log
+    tail -f /tmp/qemu.log &
+fi
+
+if [ "$BALLOON" == "1" ]; then
+  echo "[balloon]"
+  FLAGS_BALLOON="-device virtio-balloon"
+  echo "parameter: ${FLAGS_BALLOON}"
+fi
+
+if [ -n "$FLAGS_OTHER" ]; then
+  echo "[other]"
+  echo "parameters: ${FLAGS_OTHER}"
+fi
+
+${QEMU} -version 2>&1
+
 set -x
-exec /usr/bin/kvm ${FLAGS_REMOTE_ACCESS} \
-  -k en-us -m ${RAM} -smp ${SMP} -cpu ${FLAGS_CPU} -usb -usbdevice tablet -no-shutdown \
+
+exec ${QEMU} ${FLAGS_REMOTE_ACCESS} \
+  -k en-us \
+  -machine ${MACHINE} \
+  -m ${RAM} \
+  -smp ${SMP} \
+  -cpu ${FLAGS_CPU} \
+  -no-shutdown \
+  -enable-kvm \
   -name ${HOSTNAME} \
+  ${FLAGS_DEBUG} \
+  ${FLAGS_MONITOR} \
+  ${FLAGS_BALLOON} \
   ${FLAGS_DISK_IMAGE} \
   ${FLAGS_FLOPPY_IMAGE} \
+  ${FLAGS_CONSOLE} \
   ${FLAGS_ISO} \
   ${FLAGS_ISO2} \
   ${FLAGS_NETWORK} \
   ${FLAGS_KEYBOARD} \
-  ${FLAGS_BOOT}
+  ${FLAGS_USB} \
+  ${FLAGS_BOOT} \
+  ${FLAGS_BIOS} \
+  ${FLAGS_OTHER}

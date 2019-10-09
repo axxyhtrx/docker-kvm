@@ -1,0 +1,10 @@
+version: '2'
+services:
+    kvm:
+        restart: always
+        image: axxyhtrx/kvm
+        ports:
+            - "22:50022/udp"
+        cap_add:
+            - NET_ADMIN
+            - SYS_TIME
